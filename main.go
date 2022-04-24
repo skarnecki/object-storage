@@ -2,36 +2,40 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
+	"github.com/gorilla/mux"
+	log "github.com/sirupsen/logrus"
+	"github.com/spacelift-io/homework-object-storage/backend"
+	"github.com/spacelift-io/homework-object-storage/handlers"
+	"net/http"
+	"os"
 )
 
+const NetworkNameEnvironmentVariable = "PRIVATE_NETWORK_NAME"
+const BucketNameEnvironmentVariable = "BUCKET_NAME"
+const ObjectPathParameter = "{id:[a-zA-Z0-9]{1,32}}"
+
 func main() {
-	const ContainerName = "amazin-object-storage-node"
-	
+
+
+	//TODO check for network name in env
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		panic(err)
+		log.Fatal("Can't connect to docker daemon.", err)
 	}
-
-	//Filters for running, healthy containers with name amazin-object-storage-node-[0-9]
-	filters := filters.NewArgs(
-		filters.KeyValuePair{Key: "name", Value: ContainerName},
-		filters.KeyValuePair{Key: "status", Value: "running"},
-		//filters.KeyValuePair{Key: "health", Value: "healthy"}, //FIXME add healthchecks
-		)
-	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{Limit: 10, Filters: filters})
+	servers, err := backend.NewBackend(context.Background(), cli, os.Getenv(NetworkNameEnvironmentVariable), os.Getenv(BucketNameEnvironmentVariable))
 	if err != nil {
-		panic(err)
+		log.Fatal("Can't connect to servers handler.", err)
 	}
+	err = servers.EndpointList(context.Background())
+	if err != nil {
+		log.Fatal("Can't connect to servers handler.", err)
+	}
+	log.Printf("Found %d servers servers", len(servers.Servers))
 
-	for _, container := range containers {
-		details, err := cli.ContainerInspect(context.Background(), container.ID)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Printf("%s\n", details.NetworkSettings)
-	}
+	r := mux.NewRouter()
+	r.HandleFunc("/object/" + ObjectPathParameter, handlers.NewReadObjectHandler(servers)).Methods("GET")
+	r.HandleFunc("/object/" + ObjectPathParameter, handlers.WriteObject).Methods("PUT")
+	http.Handle("/", r)
+	log.Fatal(http.ListenAndServe(":3000", r))
 }
