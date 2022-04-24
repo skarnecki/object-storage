@@ -2,7 +2,7 @@ version: "3.7"
 
 services:
   amazin-object-storage-node-1: &object-storage-node
-    image: minio/minio
+    image: minio/minio:${MINIO_VERSION}
     command: server --console-address ":9001" /tmp/data
     ports: [ "9001:9001" ] # You can open localhost:9001 in your browser to debug what objects are on this node.
     networks:
@@ -11,8 +11,8 @@ services:
         ipv4_address: 169.253.0.2
     environment:
       # Same for the environment variables, use the local docker socket to read it.
-      - MINIO_ACCESS_KEY=ring
-      - MINIO_SECRET_KEY=treepotato
+      - MINIO_ROOT_USER=ring
+      - MINIO_ROOT_PASSWORD=treepotato
 
   amazin-object-storage-node-2:
     <<: *object-storage-node
@@ -21,8 +21,8 @@ services:
       amazin-object-storage:
         ipv4_address: 169.253.0.3
     environment:
-      - MINIO_ACCESS_KEY=maglev
-      - MINIO_SECRET_KEY=baconpapaya
+      - MINIO_ROOT_USER=maglev
+      - MINIO_ROOT_PASSWORD=baconpapaya
 
   amazin-object-storage-node-3:
     <<: *object-storage-node
@@ -31,8 +31,8 @@ services:
       amazin-object-storage:
         ipv4_address: 169.253.0.4
     environment:
-      - MINIO_ACCESS_KEY=rendezvous
-      - MINIO_SECRET_KEY=bluegreen
+      - MINIO_ROOT_USER=rendezvous
+      - MINIO_ROOT_PASSWORD=bluegreen
 
   gateway-container: # Here, this is where you can configure your gateway.
     # Feel free to change configuration options of this container, like the image, or the Dockerfile itself.
