@@ -11,25 +11,23 @@ import (
 	"time"
 )
 
-type  MinioServer struct{
-	ip       string
-	user     string
-	password string
-	bucketName string
+type MinioServer struct {
+	ip            string
+	user          string
+	password      string
+	bucketName    string
 	defaultExpiry time.Duration
-	Client   *minio.Client
+	Client        *minio.Client
 }
 
 func NewMinioServer(ip string, bucketName string, user string, password string) (*MinioServer, error) {
 	server := &MinioServer{
-		bucketName: bucketName,
+		bucketName:    bucketName,
 		defaultExpiry: 5 * time.Minute,
-		ip: ip,
-		user: user,
-		password: password,
+		ip:            ip,
+		user:          user,
+		password:      password,
 	}
-
-
 
 	if err := server.createClient(); err != nil {
 		return nil, err
@@ -38,6 +36,7 @@ func NewMinioServer(ip string, bucketName string, user string, password string) 
 	return server, nil
 }
 
+//Connecting to minio server and ensure bucket exist
 func (s *MinioServer) createClient() error {
 	minioClient, err := minio.New(fmt.Sprintf("%s:9000", s.ip), &minio.Options{
 		Creds:  credentials.NewStaticV4(s.user, s.password, ""),
@@ -72,10 +71,6 @@ func (s *MinioServer) PutObject(ctx context.Context, id string, reader io.Reader
 		return err
 	}
 	log.Infof("Uploaded file `%s`", id)
-	log.Info(uploadInfo)
+	log.Debug(uploadInfo)
 	return nil
 }
-
-
-
-

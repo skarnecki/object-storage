@@ -1,6 +1,8 @@
 version: "3.7"
 
 services:
+#TODO use volumes to store data
+#TODO health checks for containers
   amazin-object-storage-node-1: &object-storage-node
     image: minio/minio:${MINIO_VERSION}
     command: server --console-address ":9001" /tmp/data
@@ -37,7 +39,7 @@ services:
   gateway-container: # Here, this is where you can configure your gateway.
     # Feel free to change configuration options of this container, like the image, or the Dockerfile itself.
     build: .
-    command: go run main.go
+    command: ./homework-object-storage
     ports: [ "3000:3000" ]
     networks:
       amazin-object-storage:

@@ -15,13 +15,13 @@ import (
 )
 
 type Pool struct {
-	cli         *client.Client
-	networkName string
-	BucketName string
-	containerName string
+	cli                  *client.Client
+	networkName          string
+	BucketName           string
+	containerName        string
 	minioUserEnvVariable string
-	minioPwdEnvVariable string
-	Servers map[string]*MinioServer
+	minioPwdEnvVariable  string
+	Servers              map[string]*MinioServer
 }
 
 func NewPool(ctx context.Context, cli *client.Client, networkName string, bucketName string, containerName string,
@@ -33,16 +33,15 @@ func NewPool(ctx context.Context, cli *client.Client, networkName string, bucket
 	}
 	serversMap := make(map[string]*MinioServer)
 	return &Pool{
-		BucketName: bucketName,
-		cli: cli,
-		networkName: networkName,
-		containerName: containerName,
+		BucketName:           bucketName,
+		cli:                  cli,
+		networkName:          networkName,
+		containerName:        containerName,
 		minioUserEnvVariable: minioUserEnvVariable,
-		minioPwdEnvVariable: minioPwdEnvVariable,
-		Servers: serversMap,
+		minioPwdEnvVariable:  minioPwdEnvVariable,
+		Servers:              serversMap,
 	}, nil
 }
-
 
 func (b Pool) EndpointList(ctx context.Context) error {
 	//Filters for running, healthy containers with name amazin-object-storage-node-[0-9]
@@ -76,24 +75,7 @@ func (b Pool) EndpointList(ctx context.Context) error {
 		return fmt.Errorf("no running Minio containers found")
 	}
 
-	b.sortServers()
-
 	return nil
-}
-
-func (b Pool) createServer(details types.ContainerJSON, ip string, bucketName string) (*MinioServer, error) {
-	userVar := fmt.Sprintf("%s=", b.minioUserEnvVariable)
-	pwdVar := fmt.Sprintf("%s=", b.minioPwdEnvVariable)
-	user := ""
-	password := ""
-	for _, config := range details.Config.Env {
-		if strings.HasPrefix(config, userVar) {
-			user = strings.Replace(config, userVar, "", 1)
-		} else if strings.HasPrefix(config, pwdVar) {
-			password = strings.Replace(config, pwdVar, "", 1)
-		}
-	}
-	return NewMinioServer(ip, bucketName, user, password)
 }
 
 func (b Pool) FindServerIPById(id string) string {
@@ -101,19 +83,18 @@ func (b Pool) FindServerIPById(id string) string {
 	h.Write([]byte(id))
 
 	numberOfServers := len(b.Servers)
-	log.Infof("Hash calculated: %d, Servers available: %d", h.Sum32(), numberOfServers)
+	log.Debugf("Hash calculated: %d, Servers available: %d", h.Sum32(), numberOfServers)
 	serverNumber := h.Sum32() % uint32(numberOfServers)
-	log.Infof("Server no %d", serverNumber)
+	log.Debugf("Server no %d", serverNumber)
 	keys := make([]string, 0, len(b.Servers))
 
 	for k := range b.Servers {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	log.Infof("Keys %d", keys)
 	hashedServerIp := keys[serverNumber]
 
-	log.Infof("Hash pointed to `%s`", hashedServerIp)
+	log.Debugf("Hash pointed to `%s`", hashedServerIp)
 	return hashedServerIp
 }
 
@@ -158,19 +139,19 @@ func (b Pool) PutObject(ctx context.Context, id string, reader io.Reader, object
 	return nil
 }
 
-func (b *Pool) sortServers() {
-	newOrder :=  make(map[string]*MinioServer)
-	keys := make([]string, 0, len(b.Servers))
-
-	for k := range b.Servers {
-		keys = append(keys, k)
+func (b Pool) createServer(details types.ContainerJSON, ip string, bucketName string) (*MinioServer, error) {
+	userVar := fmt.Sprintf("%s=", b.minioUserEnvVariable)
+	pwdVar := fmt.Sprintf("%s=", b.minioPwdEnvVariable)
+	user := ""
+	password := ""
+	for _, config := range details.Config.Env {
+		if strings.HasPrefix(config, userVar) {
+			user = strings.Replace(config, userVar, "", 1)
+		} else if strings.HasPrefix(config, pwdVar) {
+			password = strings.Replace(config, pwdVar, "", 1)
+		}
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		newOrder[k] = b.Servers[k]
-	}
-
-	b.Servers = newOrder
+	return NewMinioServer(ip, bucketName, user, password)
 }
 
 func checkIfObjectNotExistError(err error) bool {
@@ -178,7 +159,7 @@ func checkIfObjectNotExistError(err error) bool {
 	return "NoSuchKey" == errResp.Code
 }
 
-
+//Check if provided network name is present
 func verifyNetwork(ctx context.Context, cli *client.Client, networkName string) (string, error) {
 	networks, err := cli.NetworkList(ctx, types.NetworkListOptions{Filters: filters.NewArgs(filters.KeyValuePair{"name", networkName})})
 	if err != nil {

@@ -45,11 +45,10 @@ func (r *ReadObject) ReadObject(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	//TODO goroutine?
 	proxyUrl(writer, url)
 }
 
-func proxyUrl(writer http.ResponseWriter, url *url.URL)  {
+func proxyUrl(writer http.ResponseWriter, url *url.URL) {
 	client := &http.Client{}
 	resp, err := client.Get(url.String())
 	defer resp.Body.Close()
