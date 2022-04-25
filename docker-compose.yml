@@ -37,7 +37,7 @@ services:
   gateway-container: # Here, this is where you can configure your gateway.
     # Feel free to change configuration options of this container, like the image, or the Dockerfile itself.
     build: .
-    command: ls -la
+    command: go run main.go
     ports: [ "3000:3000" ]
     networks:
       amazin-object-storage:

@@ -7,10 +7,10 @@ import (
 )
 
 type WriteObject struct {
-	backend *backend.Backend
+	backend *backend.Pool
 }
 
-func NewWriteObjectHandler(backend *backend.Backend) http.HandlerFunc {
+func NewWriteObjectHandler(backend *backend.Pool) http.HandlerFunc {
 	read := WriteObject{}
 	read.backend = backend
 	return read.WriteObject
@@ -25,4 +25,5 @@ func (w *WriteObject) WriteObject(writer http.ResponseWriter, request *http.Requ
 		http.Error(writer, "Server error", http.StatusInternalServerError)
 		return
 	}
+	writer.WriteHeader(http.StatusOK)
 }

@@ -10,45 +10,44 @@ import (
 	log "github.com/sirupsen/logrus"
 	"hash/fnv"
 	"io"
-	"reflect"
-	"time"
+	"sort"
+	"strings"
 )
 
-type Backend struct {
+type Pool struct {
 	cli         *client.Client
 	networkName string
 	BucketName string
+	containerName string
+	minioUserEnvVariable string
+	minioPwdEnvVariable string
 	Servers map[string]*MinioServer
 }
 
-func NewBackend(ctx context.Context, cli *client.Client, networkName string, bucketName string) (*Backend, error) {
+func NewPool(ctx context.Context, cli *client.Client, networkName string, bucketName string, containerName string,
+	minioUserEnvVariable string,
+	minioPwdEnvVariable string) (*Pool, error) {
 	networkName, err := verifyNetwork(ctx, cli, networkName)
 	if err != nil {
 		return nil, err
 	}
 	serversMap := make(map[string]*MinioServer)
-	return &Backend{BucketName: bucketName, cli: cli, networkName: networkName, Servers: serversMap}, nil
+	return &Pool{
+		BucketName: bucketName,
+		cli: cli,
+		networkName: networkName,
+		containerName: containerName,
+		minioUserEnvVariable: minioUserEnvVariable,
+		minioPwdEnvVariable: minioPwdEnvVariable,
+		Servers: serversMap,
+	}, nil
 }
 
-func (b Backend) EndpointListStub(ctx context.Context, ip string) error {
-	 xx := &MinioServer{
-		ip:            ip,
-		user:          "minioadmin",
-		password:      "minioadmin",
-		bucketName:    b.BucketName,
-		defaultExpiry: 5 * time.Minute,
-		Client:        nil,
-	}
 
-	xx.createClient()
-	b.Servers[ip] = xx
-	return nil
-}
-
-func (b Backend) EndpointList(ctx context.Context) error {
+func (b Pool) EndpointList(ctx context.Context) error {
 	//Filters for running, healthy containers with name amazin-object-storage-node-[0-9]
 	containerFilters := filters.NewArgs(
-		filters.KeyValuePair{Key: "name", Value: ContainerName},
+		filters.KeyValuePair{Key: "name", Value: b.containerName},
 		filters.KeyValuePair{Key: "status", Value: "running"},
 		//containerFilters.KeyValuePair{Key: "health", Value: "healthy"}, //FIXME add health checks
 	)
@@ -62,8 +61,9 @@ func (b Backend) EndpointList(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+
 		ip := details.NetworkSettings.Networks[b.networkName].IPAddress
-		minio, err := NewMinioServer(details, ip, b.BucketName)
+		minio, err := b.createServer(details, ip, b.BucketName)
 		if err != nil {
 			//If one of the servers are miss configured we should log it and try others
 			log.Warn(err)
@@ -75,24 +75,49 @@ func (b Backend) EndpointList(ctx context.Context) error {
 	if len(b.Servers) < 1 {
 		return fmt.Errorf("no running Minio containers found")
 	}
+
+	b.sortServers()
+
 	return nil
 }
 
-func (b Backend) FindServerIPById(id string) string {
+func (b Pool) createServer(details types.ContainerJSON, ip string, bucketName string) (*MinioServer, error) {
+	userVar := fmt.Sprintf("%s=", b.minioUserEnvVariable)
+	pwdVar := fmt.Sprintf("%s=", b.minioPwdEnvVariable)
+	user := ""
+	password := ""
+	for _, config := range details.Config.Env {
+		if strings.HasPrefix(config, userVar) {
+			user = strings.Replace(config, userVar, "", 1)
+		} else if strings.HasPrefix(config, pwdVar) {
+			password = strings.Replace(config, pwdVar, "", 1)
+		}
+	}
+	return NewMinioServer(ip, bucketName, user, password)
+}
+
+func (b Pool) FindServerIPById(id string) string {
 	h := fnv.New32a()
 	h.Write([]byte(id))
 
-	lastServer := len(b.Servers)
+	numberOfServers := len(b.Servers)
+	log.Infof("Hash calculated: %d, Servers available: %d", h.Sum32(), numberOfServers)
+	serverNumber := h.Sum32() % uint32(numberOfServers)
+	log.Infof("Server no %d", serverNumber)
+	keys := make([]string, 0, len(b.Servers))
 
-	serverNumber := h.Sum32() % uint32(lastServer)
-	keys := reflect.ValueOf(b.Servers).MapKeys()
-	hashedServerIp := keys[serverNumber].String()
+	for k := range b.Servers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	log.Infof("Keys %d", keys)
+	hashedServerIp := keys[serverNumber]
 
 	log.Infof("Hash pointed to `%s`", hashedServerIp)
 	return hashedServerIp
 }
 
-func (b Backend) FindObjectServer(ctx context.Context, id string) (*MinioServer, error) {
+func (b Pool) FindObjectServer(ctx context.Context, id string) (*MinioServer, error) {
 	hashedServerIp := b.FindServerIPById(id)
 	objDetails, err := b.Servers[hashedServerIp].Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
 
@@ -124,13 +149,28 @@ func (b Backend) FindObjectServer(ctx context.Context, id string) (*MinioServer,
 	return nil, nil
 }
 
-func (b Backend) PutObject(ctx context.Context, id string, reader io.Reader, objectSize int64) error {
+func (b Pool) PutObject(ctx context.Context, id string, reader io.Reader, objectSize int64) error {
 	serverIp := b.FindServerIPById(id)
 	err := b.Servers[serverIp].PutObject(ctx, id, reader, objectSize)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (b *Pool) sortServers() {
+	newOrder :=  make(map[string]*MinioServer)
+	keys := make([]string, 0, len(b.Servers))
+
+	for k := range b.Servers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		newOrder[k] = b.Servers[k]
+	}
+
+	b.Servers = newOrder
 }
 
 func checkIfObjectNotExistError(err error) bool {

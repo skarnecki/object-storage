@@ -3,13 +3,11 @@ package backend
 import (
 	"context"
 	"fmt"
-	"github.com/docker/docker/api/types"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -22,22 +20,16 @@ type  MinioServer struct{
 	Client   *minio.Client
 }
 
-func NewMinioServer(details types.ContainerJSON, ip string, bucketName string) (*MinioServer, error) {
+func NewMinioServer(ip string, bucketName string, user string, password string) (*MinioServer, error) {
 	server := &MinioServer{
 		bucketName: bucketName,
 		defaultExpiry: 5 * time.Minute,
 		ip: ip,
+		user: user,
+		password: password,
 	}
 
-	userVar := fmt.Sprintf("%s=", MinioUserEnvVariable)
-	pwdVar := fmt.Sprintf("%s=", MinioPwdEnvVariable)
-	for _, config := range details.Config.Env {
-		if strings.HasPrefix(config, userVar) {
-			server.user = strings.Replace(config, userVar, "", 1)
-		} else if strings.HasPrefix(config, pwdVar) {
-			server.password = strings.Replace(config, pwdVar, "", 1)
-		}
-	}
+
 
 	if err := server.createClient(); err != nil {
 		return nil, err

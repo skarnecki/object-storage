@@ -14,6 +14,9 @@ import (
 const NetworkNameEnvironmentVariable = "PRIVATE_NETWORK_NAME"
 const BucketNameEnvironmentVariable = "BUCKET_NAME"
 const ObjectPathParameter = "{id:[a-zA-Z0-9]{1,32}}"
+const ContainerName = "amazin-object-storage-node"
+const MinioUserEnvVariable = "MINIO_ROOT_USER"
+const MinioPwdEnvVariable = "MINIO_ROOT_PASSWORD"
 
 func main() {
 	//TODO check for network name in env
@@ -21,13 +24,20 @@ func main() {
 	if err != nil {
 		log.Fatal("Can't connect to docker daemon.", err)
 	}
-	servers, err := backend.NewBackend(context.Background(), cli, os.Getenv(NetworkNameEnvironmentVariable), os.Getenv(BucketNameEnvironmentVariable))
+	servers, err := backend.NewPool(
+		context.Background(), cli,
+		os.Getenv(NetworkNameEnvironmentVariable),
+		os.Getenv(BucketNameEnvironmentVariable),
+		ContainerName,
+		MinioUserEnvVariable,
+		MinioPwdEnvVariable,
+	)
 	if err != nil {
 		log.Fatal("Can't connect to servers handler.", err)
 	}
 
 	//FIXME
-	err = servers.EndpointListStub(context.Background(), "127.0.0.1")
+	err = servers.EndpointList(context.Background())
 
 	if err != nil {
 		log.Fatal("Can't connect to servers handler.", err)

@@ -11,10 +11,10 @@ import (
 )
 
 type ReadObject struct {
-	backend *backend.Backend
+	backend *backend.Pool
 }
 
-func NewReadObjectHandler(backend *backend.Backend) http.HandlerFunc {
+func NewReadObjectHandler(backend *backend.Pool) http.HandlerFunc {
 	read := ReadObject{}
 	read.backend = backend
 	return read.ReadObject
@@ -45,6 +45,7 @@ func (r *ReadObject) ReadObject(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
+	//TODO goroutine?
 	proxyUrl(writer, url)
 }
 
