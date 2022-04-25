@@ -9,7 +9,9 @@ import (
 	"github.com/minio/minio-go/v7"
 	log "github.com/sirupsen/logrus"
 	"hash/fnv"
+	"io"
 	"reflect"
+	"time"
 )
 
 type Backend struct {
@@ -26,6 +28,21 @@ func NewBackend(ctx context.Context, cli *client.Client, networkName string, buc
 	}
 	serversMap := make(map[string]*MinioServer)
 	return &Backend{BucketName: bucketName, cli: cli, networkName: networkName, Servers: serversMap}, nil
+}
+
+func (b Backend) EndpointListStub(ctx context.Context, ip string) error {
+	 xx := &MinioServer{
+		ip:            ip,
+		user:          "minioadmin",
+		password:      "minioadmin",
+		bucketName:    b.BucketName,
+		defaultExpiry: 5 * time.Minute,
+		Client:        nil,
+	}
+
+	xx.createClient()
+	b.Servers[ip] = xx
+	return nil
 }
 
 func (b Backend) EndpointList(ctx context.Context) error {
@@ -61,22 +78,30 @@ func (b Backend) EndpointList(ctx context.Context) error {
 	return nil
 }
 
-func (b Backend) FindObjectServer(ctx context.Context, id string) (*MinioServer, error) {
+func (b Backend) FindServerIPById(id string) string {
 	h := fnv.New32a()
 	h.Write([]byte(id))
-	serverNumber := h.Sum32() % uint32(len(b.Servers)-1)
+
+	lastServer := len(b.Servers)
+
+	serverNumber := h.Sum32() % uint32(lastServer)
 	keys := reflect.ValueOf(b.Servers).MapKeys()
 	hashedServerIp := keys[serverNumber].String()
 
-	objInfo, err := b.Servers[hashedServerIp].Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
+	log.Infof("Hash pointed to `%s`", hashedServerIp)
+	return hashedServerIp
+}
+
+func (b Backend) FindObjectServer(ctx context.Context, id string) (*MinioServer, error) {
+	hashedServerIp := b.FindServerIPById(id)
+	objDetails, err := b.Servers[hashedServerIp].Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
 
 	//TODO check if 404 is an error
-	if err != nil {
+	if err != nil && !checkIfObjectNotExistError(err) {
 		return nil, err
 	}
 
-	//FIXME make sure etags are always set
-	if objInfo.ETag != "" {
+	if objDetails.ETag != "" {
 		return b.Servers[hashedServerIp], nil
 	}
 
@@ -86,17 +111,31 @@ func (b Backend) FindObjectServer(ctx context.Context, id string) (*MinioServer,
 			//Server that we already checked
 			continue
 		}
-		objInfo, err := server.Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
-		if err != nil {
+		_, err := server.Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
+		if err != nil && !checkIfObjectNotExistError(err) {
 			return nil, err
 		}
-		if objInfo.ETag != "" {
+		if objDetails.ETag != "" {
 			return server, nil
 		}
 	}
 
 	//No servers containing object, no errors = 404
 	return nil, nil
+}
+
+func (b Backend) PutObject(ctx context.Context, id string, reader io.Reader, objectSize int64) error {
+	serverIp := b.FindServerIPById(id)
+	err := b.Servers[serverIp].PutObject(ctx, id, reader, objectSize)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkIfObjectNotExistError(err error) bool {
+	errResp := minio.ToErrorResponse(err)
+	return "NoSuchKey" == errResp.Code
 }
 
 
@@ -108,7 +147,7 @@ func verifyNetwork(ctx context.Context, cli *client.Client, networkName string) 
 
 	//We should find exactly one network
 	if len(networks) != 1 {
-		return "", fmt.Errorf("no shared network found Minio %s", networkName)
+		return "", fmt.Errorf("no shared network found Minio: %s", networkName)
 	}
 	return networks[0].Name, nil
 }

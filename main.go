@@ -16,8 +16,6 @@ const BucketNameEnvironmentVariable = "BUCKET_NAME"
 const ObjectPathParameter = "{id:[a-zA-Z0-9]{1,32}}"
 
 func main() {
-
-
 	//TODO check for network name in env
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
@@ -27,7 +25,10 @@ func main() {
 	if err != nil {
 		log.Fatal("Can't connect to servers handler.", err)
 	}
-	err = servers.EndpointList(context.Background())
+
+	//FIXME
+	err = servers.EndpointListStub(context.Background(), "127.0.0.1")
+
 	if err != nil {
 		log.Fatal("Can't connect to servers handler.", err)
 	}
@@ -35,7 +36,8 @@ func main() {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/object/" + ObjectPathParameter, handlers.NewReadObjectHandler(servers)).Methods("GET")
-	r.HandleFunc("/object/" + ObjectPathParameter, handlers.WriteObject).Methods("PUT")
+	r.HandleFunc("/object/" + ObjectPathParameter, handlers.NewWriteObjectHandler(servers)).Methods("PUT")
 	http.Handle("/", r)
+
 	log.Fatal(http.ListenAndServe(":3000", r))
 }

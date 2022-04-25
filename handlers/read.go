@@ -45,7 +45,7 @@ func (r *ReadObject) ReadObject(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	go proxyUrl(writer, url)
+	proxyUrl(writer, url)
 }
 
 func proxyUrl(writer http.ResponseWriter, url *url.URL)  {
