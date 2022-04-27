@@ -157,7 +157,7 @@ func (b Pool) getContainerList(ctx context.Context) ([]types.Container, error) {
 	containerFilters := filters.NewArgs(
 		filters.KeyValuePair{Key: "name", Value: b.containerName},
 		filters.KeyValuePair{Key: "status", Value: "running"},
-		//containerFilters.KeyValuePair{Key: "health", Value: "healthy"}, //FIXME add health checks
+		filters.KeyValuePair{Key: "health", Value: "healthy"},
 	)
 	containers, err := b.cli.ContainerList(ctx, types.ContainerListOptions{Limit: 10, Filters: containerFilters})
 	if err != nil {

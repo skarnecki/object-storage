@@ -7,6 +7,10 @@ services:
     image: minio/minio:${MINIO_VERSION}
     command: server --console-address ":9001" /tmp/data
     ports: [ "9001:9001", "9000:9000"] # You can open localhost:9001 in your browser to debug what objects are on this node.
+    healthcheck:
+      test: "curl -f localhost:9000/minio/health/live"
+      start_period: 30s
+      interval: 10s
     networks:
       amazin-object-storage:
         # Don't copy those addresses in your application. Use the local docker socket to get them.
@@ -42,9 +46,12 @@ services:
     command: ./homework-object-storage
     ports: [ "3000:3000" ]
     depends_on:
-      - amazin-object-storage-node-1
-      - amazin-object-storage-node-2
-      - amazin-object-storage-node-3
+      amazin-object-storage-node-1:
+        condition: service_healthy
+      amazin-object-storage-node-2:
+        condition: service_healthy
+      amazin-object-storage-node-3:
+        condition: service_healthy
     networks:
       amazin-object-storage:
         ipv4_address: 169.253.0.5
