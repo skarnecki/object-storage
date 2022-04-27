@@ -1,3 +1,4 @@
 .idea/
 go.sum
 backend/mocks
+wire_gen.go

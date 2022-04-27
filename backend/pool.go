@@ -8,10 +8,12 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/minio/minio-go/v7"
 	log "github.com/sirupsen/logrus"
+	"github.com/spacelift-io/homework-object-storage/config"
 	"hash/fnv"
 	"io"
 	"sort"
 	"strings"
+	"time"
 )
 
 //go:generate mockgen -source=$GOFILE -destination=$PWD/mocks/${GOFILE} -package=mocks
@@ -31,23 +33,24 @@ type Pool struct {
 	minioPwdEnvVariable  string
 }
 
-func NewPool(ctx context.Context, cli *client.Client, networkName string, bucketName string, containerName string,
-	minioUserEnvVariable string,
-	minioPwdEnvVariable string) (*Pool, error) {
-	networkName, err := verifyNetwork(ctx, cli, networkName)
+func NewPool(cli *client.Client, config config.Config) (*Pool, error) {
+	networkName, err := verifyNetwork(context.Background(), cli, config.NetworkName)
 	if err != nil {
 		return nil, err
 	}
 	serversMap := make(map[string]*MinioServer)
-	return &Pool{
-		BucketName:           bucketName,
+	pool := &Pool{
+		BucketName:           config.BucketName,
 		cli:                  cli,
 		networkName:          networkName,
-		containerName:        containerName,
-		minioUserEnvVariable: minioUserEnvVariable,
-		minioPwdEnvVariable:  minioPwdEnvVariable,
+		containerName:        config.ContainerName,
+		minioUserEnvVariable: config.MinioUser,
+		minioPwdEnvVariable:  config.MinioPwd,
 		Servers:              serversMap,
-	}, nil
+	}
+
+	autoRefresh(context.Background(), config.RefreshInterval, pool)
+	return pool, pool.EndpointList(context.Background())
 }
 
 func (b Pool) EndpointList(ctx context.Context) error {
@@ -56,11 +59,16 @@ func (b Pool) EndpointList(ctx context.Context) error {
 		return err
 	}
 
+	newServerIps := make(map[string]bool, len(containers))
 	for _, container := range containers {
-		if err := b.appendServers(container); err != nil {
+		ip, err := b.appendServers(container)
+		if err != nil {
 			return err
 		}
+		newServerIps[ip] = true
 	}
+
+	b.clearRemoved(newServerIps)
 
 	if len(b.Servers) < 1 {
 		return fmt.Errorf("no running Minio containers found")
@@ -77,16 +85,22 @@ func (b Pool) FindServerIPById(id string) string {
 	log.Debugf("Hash calculated: %d, Servers available: %d", h.Sum32(), numberOfServers)
 	serverNumber := h.Sum32() % uint32(numberOfServers)
 	log.Debugf("Server no %d", serverNumber)
-	keys := make([]string, 0, len(b.Servers))
 
-	for k := range b.Servers {
-		keys = append(keys, k)
-	}
+
+	keys := b.getServerIps()
 	sort.Strings(keys)
 	hashedServerIp := keys[serverNumber]
 
 	log.Debugf("Hash pointed to `%s`", hashedServerIp)
 	return hashedServerIp
+}
+
+func (b Pool) getServerIps() []string {
+	keys := make([]string, 0, len(b.Servers))
+	for k := range b.Servers {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func (b Pool) FindObjectServer(ctx context.Context, id string) (*MinioServer, error) {
@@ -119,7 +133,6 @@ func (b Pool) FindObjectServer(ctx context.Context, id string) (*MinioServer, er
 func (b Pool) checkForObject(ctx context.Context, id string, server *MinioServer) (error, bool) {
 	objDetails, err := server.Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
 
-	//TODO check if 404 is an error
 	if err != nil && !checkIfObjectNotExistError(err) {
 		return err, true
 	}
@@ -170,10 +183,10 @@ func (b Pool) createServer(details types.ContainerJSON, ip string, bucketName st
 }
 
 
-func (b Pool) appendServers(container types.Container) error {
+func (b Pool) appendServers(container types.Container) (string, error) {
 	details, err := b.cli.ContainerInspect(context.Background(), container.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	ip := details.NetworkSettings.Networks[b.networkName].IPAddress
@@ -181,10 +194,19 @@ func (b Pool) appendServers(container types.Container) error {
 	if err != nil {
 		//If one of the servers are miss configured we should log it and try others
 		log.Warn(err)
-		return nil
+		return "", nil
 	}
 	b.Servers[ip] = minio
-	return nil
+	return ip, nil
+}
+
+func (b Pool) clearRemoved(newIps map[string]bool) {
+	for ip := range b.Servers {
+		if _, ok := newIps[ip]; !ok {
+			log.Warnf("Removing %s since offline", ip)
+			delete(b.Servers, ip)
+		}
+	}
 }
 
 func checkIfObjectNotExistError(err error) bool {
@@ -204,4 +226,17 @@ func verifyNetwork(ctx context.Context, cli *client.Client, networkName string) 
 		return "", fmt.Errorf("no shared network found Minio: %s", networkName)
 	}
 	return networks[0].Name, nil
+}
+
+func autoRefresh(ctx context.Context, RefreshInterval time.Duration, servers *Pool) {
+	//Schedule every `RefreshInterval` server list refresh
+	go func() {
+		for _ = range time.Tick(RefreshInterval) {
+			err := servers.EndpointList(ctx)
+			if err != nil {
+				log.Fatal("Can't connect to servers handler.", err)
+			}
+			log.Debugf("Found %d servers servers", len(servers.Servers))
+		}
+	}()
 }

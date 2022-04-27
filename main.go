@@ -1,16 +1,18 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"github.com/docker/docker/client"
+	"github.com/google/wire"
+	"github.com/spacelift-io/homework-object-storage/config"
+	"github.com/spacelift-io/homework-object-storage/handlers"
+	"net/http"
+	"strconv"
+
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
 	"github.com/spacelift-io/homework-object-storage/backend"
-	"github.com/spacelift-io/homework-object-storage/handlers"
-	"net/http"
 	"os"
-	"strconv"
 	"time"
 )
 
@@ -30,53 +32,38 @@ const MaxPayloadSize = 8 << (10 * 2) //8 MB
 // DOCKER_CERT_PATH to load the TLS certificates from.
 // DOCKER_TLS_VERIFY to enable or disable TLS verification, off by default.
 
+var diContainer = wire.NewSet(client.NewClientWithOpts, backend.NewPool, handlers.NewObjectHandler, NewRouter)
+
 func main() {
 	log.SetLevel(log.DebugLevel)
-
-	cli, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		log.Fatal("Can't connect to docker daemon.", err)
-	}
-
-	//Create minio server pool manager
-	servers, err := backend.NewPool(
-		context.Background(), cli,
+	cfg := config.Config{
 		os.Getenv(NetworkNameEnvironmentVariable),
 		os.Getenv(BucketNameEnvironmentVariable),
 		ContainerName,
 		MinioUserEnvVariable,
 		MinioPwdEnvVariable,
-	)
-	if err != nil {
-		log.Fatal("Can't connect to servers handler.", err)
+		MaxPayloadSize,
+		RefreshInterval,
 	}
+	router, err := InitializeApp(cfg, client.FromEnv)
 
-	//Schedule every `RefreshInterval` server list refresh
-	go func() {
-		for _ = range time.Tick(RefreshInterval) {
-			err = servers.EndpointList(context.Background())
-			if err != nil {
-				log.Fatal("Can't connect to servers handler.", err)
-			}
-			log.Infof("Found %d servers servers", len(servers.Servers))
-		}
-	}()
-
-	httpServer(servers, err)
-}
-
-func httpServer(servers *backend.Pool, err error) {
-	//Prepare and serve HTTP
-	r := mux.NewRouter()
-	r.Use(backend.MaxBytesMiddleware(MaxPayloadSize))
-	r.HandleFunc("/object/"+ObjectPathParameter, handlers.NewReadObjectHandler(servers)).Methods("GET")
-	r.HandleFunc("/object/"+ObjectPathParameter, handlers.NewWriteObjectHandler(servers)).Methods("PUT")
-	http.Handle("/", r)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	port, err := strconv.Atoi(os.Getenv(HttpPortEnvVariable))
 	if err != nil {
 		log.Fatal("Wrong HTTP port number", err)
 	}
 	log.Printf("Serving HTTP on port %d", port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), r))
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), router))
+}
+
+func NewRouter(handler *handlers.ObjectHandler, config config.Config) *mux.Router {
+	r := mux.NewRouter()
+	r.Use(backend.MaxBytesMiddleware(config.MaxPayloadSize))
+	r.HandleFunc("/object/"+ObjectPathParameter, handler.ReadObject).Methods("GET")
+	r.HandleFunc("/object/"+ObjectPathParameter, handler.WriteObject).Methods("PUT")
+	http.Handle("/", r)
+	return r
 }

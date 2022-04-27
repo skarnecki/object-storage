@@ -4,26 +4,15 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
-	"github.com/spacelift-io/homework-object-storage/backend"
 	"io"
 	"net/http"
 	"net/url"
 )
 
-type ReadObject struct {
-	backend *backend.Pool
-}
-
-func NewReadObjectHandler(backend *backend.Pool) http.HandlerFunc {
-	read := ReadObject{}
-	read.backend = backend
-	return read.ReadObject
-}
-
-func (r *ReadObject) ReadObject(writer http.ResponseWriter, request *http.Request) {
+func (h *ObjectHandler) ReadObject(writer http.ResponseWriter, request *http.Request) {
 	id := getIdFromRequest(request)
-
-	server, err := r.backend.FindObjectServer(request.Context(), id)
+	log.Info(h.backend)
+	server, err := h.backend.FindObjectServer(request.Context(), id)
 	if err != nil {
 		//Triggers only when issues with backend
 		log.Error("problem with accessing backend servers", err)
