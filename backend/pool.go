@@ -14,14 +14,21 @@ import (
 	"strings"
 )
 
+//go:generate mockgen -source=$GOFILE -destination=$PWD/mocks/${GOFILE} -package=mocks
+type DockerClient interface {
+	ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error)
+	ContainerList(ctx context.Context, options types.ContainerListOptions) ([]types.Container, error)
+	NetworkList(ctx context.Context, options types.NetworkListOptions) ([]types.NetworkResource, error)
+}
+
 type Pool struct {
+	BucketName           string
+	Servers              map[string]*MinioServer // map[serverIp]MinioServer"
 	cli                  *client.Client
 	networkName          string
-	BucketName           string
 	containerName        string
 	minioUserEnvVariable string
 	minioPwdEnvVariable  string
-	Servers              map[string]*MinioServer
 }
 
 func NewPool(ctx context.Context, cli *client.Client, networkName string, bucketName string, containerName string,
@@ -44,31 +51,15 @@ func NewPool(ctx context.Context, cli *client.Client, networkName string, bucket
 }
 
 func (b Pool) EndpointList(ctx context.Context) error {
-	//Filters for running, healthy containers with name amazin-object-storage-node-[0-9]
-	containerFilters := filters.NewArgs(
-		filters.KeyValuePair{Key: "name", Value: b.containerName},
-		filters.KeyValuePair{Key: "status", Value: "running"},
-		//containerFilters.KeyValuePair{Key: "health", Value: "healthy"}, //FIXME add health checks
-	)
-	containers, err := b.cli.ContainerList(ctx, types.ContainerListOptions{Limit: 10, Filters: containerFilters})
+	containers, err := b.getContainerList(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, container := range containers {
-		details, err := b.cli.ContainerInspect(context.Background(), container.ID)
-		if err != nil {
+		if err := b.appendServers(container); err != nil {
 			return err
 		}
-
-		ip := details.NetworkSettings.Networks[b.networkName].IPAddress
-		minio, err := b.createServer(details, ip, b.BucketName)
-		if err != nil {
-			//If one of the servers are miss configured we should log it and try others
-			log.Warn(err)
-			continue
-		}
-		b.Servers[ip] = minio
 	}
 
 	if len(b.Servers) < 1 {
@@ -100,29 +91,24 @@ func (b Pool) FindServerIPById(id string) string {
 
 func (b Pool) FindObjectServer(ctx context.Context, id string) (*MinioServer, error) {
 	hashedServerIp := b.FindServerIPById(id)
-	objDetails, err := b.Servers[hashedServerIp].Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
 
-	//TODO check if 404 is an error
-	if err != nil && !checkIfObjectNotExistError(err) {
-		return nil, err
+	//Attempt to look for object in server pointed by hash
+	err, done := b.checkForObject(ctx, id, b.Servers[hashedServerIp])
+	if done {
+		return b.Servers[hashedServerIp], err
 	}
 
-	if objDetails.ETag != "" {
-		return b.Servers[hashedServerIp], nil
-	}
-
+	log.Debugf("Id: %s not found on %s, attempting to find on other servers", id, hashedServerIp)
 	//Hashed server does not have the object, look for other
 	for idx, server := range b.Servers {
 		if idx == hashedServerIp {
 			//Server that we already checked
 			continue
 		}
-		_, err := server.Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
-		if err != nil && !checkIfObjectNotExistError(err) {
-			return nil, err
-		}
-		if objDetails.ETag != "" {
-			return server, nil
+		err, done := b.checkForObject(ctx, id, server)
+		if done {
+			log.Debugf("Id: %s found on %s", id, idx)
+			return server, err
 		}
 	}
 
@@ -130,14 +116,43 @@ func (b Pool) FindObjectServer(ctx context.Context, id string) (*MinioServer, er
 	return nil, nil
 }
 
+func (b Pool) checkForObject(ctx context.Context, id string, server *MinioServer) (error, bool) {
+	objDetails, err := server.Client.StatObject(ctx, b.BucketName, id, minio.StatObjectOptions{})
+
+	//TODO check if 404 is an error
+	if err != nil && !checkIfObjectNotExistError(err) {
+		return err, true
+	}
+
+	if objDetails.ETag != "" {
+		return nil, true
+	}
+	return nil, false
+}
+
 func (b Pool) PutObject(ctx context.Context, id string, reader io.Reader, objectSize int64) error {
 	serverIp := b.FindServerIPById(id)
-	err := b.Servers[serverIp].PutObject(ctx, id, reader, objectSize)
-	if err != nil {
+
+	if err := b.Servers[serverIp].PutObject(ctx, id, reader, objectSize); err != nil {
 		return err
 	}
 	return nil
 }
+
+func (b Pool) getContainerList(ctx context.Context) ([]types.Container, error) {
+	//Filters for running, healthy containers with name amazin-object-storage-node-[0-9]
+	containerFilters := filters.NewArgs(
+		filters.KeyValuePair{Key: "name", Value: b.containerName},
+		filters.KeyValuePair{Key: "status", Value: "running"},
+		//containerFilters.KeyValuePair{Key: "health", Value: "healthy"}, //FIXME add health checks
+	)
+	containers, err := b.cli.ContainerList(ctx, types.ContainerListOptions{Limit: 10, Filters: containerFilters})
+	if err != nil {
+		return nil, err
+	}
+	return containers, nil
+}
+
 
 func (b Pool) createServer(details types.ContainerJSON, ip string, bucketName string) (*MinioServer, error) {
 	userVar := fmt.Sprintf("%s=", b.minioUserEnvVariable)
@@ -152,6 +167,24 @@ func (b Pool) createServer(details types.ContainerJSON, ip string, bucketName st
 		}
 	}
 	return NewMinioServer(ip, bucketName, user, password)
+}
+
+
+func (b Pool) appendServers(container types.Container) error {
+	details, err := b.cli.ContainerInspect(context.Background(), container.ID)
+	if err != nil {
+		return err
+	}
+
+	ip := details.NetworkSettings.Networks[b.networkName].IPAddress
+	minio, err := b.createServer(details, ip, b.BucketName)
+	if err != nil {
+		//If one of the servers are miss configured we should log it and try others
+		log.Warn(err)
+		return nil
+	}
+	b.Servers[ip] = minio
+	return nil
 }
 
 func checkIfObjectNotExistError(err error) bool {

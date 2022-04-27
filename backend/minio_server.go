@@ -11,13 +11,22 @@ import (
 	"time"
 )
 
+//go:generate mockgen -source=$GOFILE -destination=$PWD/mocks/${GOFILE} -package=mocks
+type MinioClient interface {
+	BucketExists(ctx context.Context, bucketName string) (bool, error)
+	PresignedGetObject(ctx context.Context, bucketName string, objectName string, expires time.Duration, reqParams url.Values) (u *url.URL, err error)
+	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (info minio.UploadInfo, err error)
+	MakeBucket(ctx context.Context, bucketName string, opts minio.MakeBucketOptions) (err error)
+	StatObject(ctx context.Context, bucketName, objectName string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
+}
+
 type MinioServer struct {
 	ip            string
 	user          string
 	password      string
 	bucketName    string
 	defaultExpiry time.Duration
-	Client        *minio.Client
+	Client        MinioClient
 }
 
 func NewMinioServer(ip string, bucketName string, user string, password string) (*MinioServer, error) {
@@ -33,19 +42,32 @@ func NewMinioServer(ip string, bucketName string, user string, password string) 
 		return nil, err
 	}
 
+	if err := server.initBucket(); err != nil {
+		return nil, err
+	}
+
 	return server, nil
 }
 
 //Connecting to minio server and ensure bucket exist
 func (s *MinioServer) createClient() error {
-	minioClient, err := minio.New(fmt.Sprintf("%s:9000", s.ip), &minio.Options{
-		Creds:  credentials.NewStaticV4(s.user, s.password, ""),
-		Secure: false,
-	})
+	minioClient, err := minio.New(
+		fmt.Sprintf("%s:9000", s.ip),
+		&minio.Options{
+			Creds:  credentials.NewStaticV4(s.user, s.password, ""),
+			Secure: false,
+		})
+
 	if err != nil {
 		return err
 	}
-	s.Client = minioClient
+	client := MinioClient(minioClient)
+	s.Client = client
+
+	return nil
+}
+
+func (s *MinioServer) initBucket() error {
 	exists, err := s.Client.BucketExists(context.Background(), s.bucketName)
 	if err != nil {
 		return err

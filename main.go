@@ -31,7 +31,8 @@ const MaxPayloadSize = 8 << (10 * 2) //8 MB
 // DOCKER_TLS_VERIFY to enable or disable TLS verification, off by default.
 
 func main() {
-	//TODO check for network name in env
+	log.SetLevel(log.DebugLevel)
+
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		log.Fatal("Can't connect to docker daemon.", err)
@@ -61,9 +62,13 @@ func main() {
 		}
 	}()
 
+	httpServer(servers, err)
+}
+
+func httpServer(servers *backend.Pool, err error) {
 	//Prepare and serve HTTP
 	r := mux.NewRouter()
-	r.Use(maxBytesMiddleware)
+	r.Use(backend.MaxBytesMiddleware(MaxPayloadSize))
 	r.HandleFunc("/object/"+ObjectPathParameter, handlers.NewReadObjectHandler(servers)).Methods("GET")
 	r.HandleFunc("/object/"+ObjectPathParameter, handlers.NewWriteObjectHandler(servers)).Methods("PUT")
 	http.Handle("/", r)
@@ -74,18 +79,4 @@ func main() {
 	}
 	log.Printf("Serving HTTP on port %d", port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), r))
-}
-
-//Middleware to check for
-func maxBytesMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		//Just in case if someone provides different content length
-		r.Body = http.MaxBytesReader(w, r.Body, MaxPayloadSize)
-		if r.ContentLength > MaxPayloadSize {
-			http.Error(w, "File too large", http.StatusBadRequest)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }

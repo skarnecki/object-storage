@@ -15,4 +15,5 @@ require (
 	golang.org/x/time v0.0.0-20220411224347-583f2d630306 // indirect
 	google.golang.org/grpc v1.46.0 // indirect
 	gotest.tools/v3 v3.2.0 // indirect
+	github.com/golang/mock v1.6.0
 )
